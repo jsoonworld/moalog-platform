@@ -1,6 +1,6 @@
-# Performance Engineering Platform
+# Moalog Platform
 
-4개의 독립 마이크로서비스를 연결하여 프로덕션급 시스템으로 통합하는 프로젝트입니다.
+moalog-server를 중심으로 트래픽 보호 · 결제 · 모니터링 서비스를 통합하는 오케스트레이션 레포입니다.
 
 ## Architecture
 

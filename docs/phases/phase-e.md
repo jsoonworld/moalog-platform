@@ -34,7 +34,7 @@ services:
   redis:                # rate-limiter + fluxpay 멱등성 (port 6379)
 ```
 
-**위치**: `performance/docker-compose.yaml` (이 레포 루트)
+**위치**: `moalog-platform/docker-compose.yaml` (이 레포 루트)
 
 ## 부하 테스트 시나리오 (k6)
 

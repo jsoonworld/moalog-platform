@@ -1,4 +1,4 @@
-# Performance Engineering Platform — 통합 개발 프롬프트
+# Moalog Platform — 통합 개발 프롬프트
 
 ## 프로젝트 개요
 
@@ -44,7 +44,7 @@
 ## 레포지토리 구조
 
 ```
-performance/
+moalog-platform/
 ├── moalog-server/            → github.com/jsoonworld/moalog-server (Rust/Axum)
 ├── distributed-rate-limiter/ → github.com/jsoonworld/distributed-rate-limiter (Kotlin/WebFlux)
 ├── fluxpay-engine/           → github.com/jsoonworld/fluxpay-engine (Java/WebFlux)
@@ -52,7 +52,7 @@ performance/
 ```
 
 각 프로젝트는 독립 레포지토리를 가지며, 코드 수정은 각 레포에서 진행합니다.
-통합은 moalog-server의 docker-compose.yaml에서 전체 서비스를 엮어 실행합니다.
+통합은 moalog-platform의 docker-compose.yaml에서 전체 서비스를 엮어 실행합니다.
 
 ---
 
