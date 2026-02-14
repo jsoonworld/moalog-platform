@@ -1,0 +1,49 @@
+# ======================
+# Sub-repositories (독립 관리)
+# ======================
+moalog-server/
+distributed-rate-limiter/
+fluxpay-engine/
+rJMX-Exporter/
+
+# ======================
+# OS / Editor
+# ======================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.iml
+
+# ======================
+# Environment / Secrets
+# ======================
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ======================
+# Docker (런타임 생성물)
+# ======================
+docker-compose.override.yaml
+
+# ======================
+# Monitoring data (런타임)
+# ======================
+prometheus-data/
+grafana-data/
+
+# ======================
+# Load test results
+# ======================
+load-tests/results/
+
+# ======================
+# Misc
+# ======================
+*.log
+tmp/
