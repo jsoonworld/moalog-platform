@@ -44,25 +44,13 @@ moalog-server를 중심으로 트래픽 보호 · 결제 · 모니터링 서비�
 | [fluxpay-engine](https://github.com/jsoonworld/fluxpay-engine) | Java / Spring WebFlux / R2DBC / PostgreSQL | 결제 엔진 |
 | [rJMX-Exporter](https://github.com/jsoonworld/rJMX-Exporter) | Rust / Axum / Tokio | JVM 모니터링 |
 
-## Roadmap
-
-| Phase | 내용 | 상태 |
-|-------|------|------|
-| [Phase A](docs/phases/phase-a.md) | moalog-server 기반 정리 (Docker화) | 진행 예정 |
-| [Phase B](docs/phases/phase-b.md) | Rate Limiter 통합 | 대기 |
-| [Phase C](docs/phases/phase-c.md) | 모니터링 통합 (Prometheus + Grafana) | 대기 |
-| [Phase D](docs/phases/phase-d.md) | FluxPay 결제 연동 | 대기 |
-| [Phase E](docs/phases/phase-e.md) | 통합 인프라 & 부하 테스트 | 대기 |
-
 ## 이 레포가 관리하는 것
 
 이 레포는 **오케스트레이션 레포**입니다. 각 서비스의 코드는 해당 레포에서 관리합니다.
 
-- `docs/` — Phase별 통합 설계 문서
-- `docker-compose.yaml` — 전체 시스템 통합 실행 (Phase E)
-- `monitoring/` — Prometheus, Grafana 설정 (Phase C)
-- `load-tests/` — k6 부하 테스트 스크립트 (Phase E)
-- `PROMPT.md` — 전체 설계서
+- `docker-compose.yaml` — 전체 시스템 통합 실행
+- `monitoring/` — Prometheus, Grafana 설정
+- `load-tests/` — k6 부하 테스트 스크립트
 
 ## Quick Start
 
