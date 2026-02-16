@@ -1,0 +1,33 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: moalog
+
+commonLabels:
+  app.kubernetes.io/part-of: moalog-platform
+  app.kubernetes.io/managed-by: kustomize
+
+resources:
+  - namespace.yaml
+  - secrets.yaml
+
+  # Data stores
+  - redis
+  - mysql
+  - postgres
+
+  # Message queue
+  - zookeeper
+  - kafka
+
+  # Application services
+  - rate-limiter
+  - fluxpay-engine
+  - moalog-server
+
+  # Monitoring
+  - monitoring
+
+  # Networking
+  - ingress.yaml
+  # cert-manager.yaml requires cert-manager CRDs installed separately

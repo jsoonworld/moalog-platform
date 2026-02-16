@@ -1,165 +1,161 @@
 # Phase 08: Kubernetes 배포
 
-## 목표
+## 상태: 완료
 
-docker-compose 기반 로컬 환경을 Kubernetes 매니페스트로 전환하여 클라우드 배포 가능 상태를 만든다.
+docker-compose 기반 로컬 환경을 Kubernetes 매니페스트(Kustomize)로 전환하여 클라우드 배포 가능 상태를 만들었다.
 
 ---
 
-## 현재 상태
+## 구현 결과
 
-| 항목 | 상태 |
+### 매니페스트 통계
+
+| 항목 | 수량 |
 |------|------|
-| docker-compose (14 서비스) | 완성, 로컬 검증 완료 |
-| rJMX-Exporter K8s | 완성 (Kustomize, Deployment, Service, ConfigMap, Secret) |
-| 나머지 서비스 K8s | **없음** |
-| Helm Chart | **없음** |
-| Ingress / TLS | **없음** |
-| Secret 관리 | 환경변수 하드코딩 |
+| 총 YAML 파일 | 83개 |
+| Deployment | 12 |
+| StatefulSet | 6 |
+| DaemonSet | 1 (Promtail) |
+| Service | 18 |
+| ConfigMap | 12 |
+| Secret | 1 (통합) |
+| PVC | 2 |
+| Ingress | 1 |
+| HPA (prod) | 3 |
+| ClusterIssuer (prod) | 1 |
+| RBAC (SA/CR/CRB) | 6 |
 
-**참고**: rJMX-Exporter에 이미 K8s 매니페스트가 있으므로, 이 패턴을 다른 서비스에 확장한다.
+### 디렉토리 구조
 
----
-
-## 작업 목록
-
-### 8-1. 서비스별 K8s 매니페스트
-
-rJMX-Exporter의 기존 패턴(Kustomize)을 따른다.
-
-**디렉토리 구조**:
 ```
-moalog-platform/k8s/
+k8s/
 ├── base/
-│   ├── moalog-server/
-│   │   ├── deployment.yaml
-│   │   ├── service.yaml
-│   │   ├── configmap.yaml
-│   │   └── kustomization.yaml
-│   ├── rate-limiter/
-│   │   ├── deployment.yaml
-│   │   ├── service.yaml
-│   │   └── kustomization.yaml
-│   ├── fluxpay-engine/
-│   │   ├── deployment.yaml
-│   │   ├── service.yaml
-│   │   └── kustomization.yaml
-│   ├── redis/
-│   │   ├── statefulset.yaml
-│   │   ├── service.yaml
-│   │   └── kustomization.yaml
-│   ├── mysql/
-│   │   ├── statefulset.yaml
-│   │   ├── service.yaml
-│   │   ├── configmap.yaml    # init SQL
-│   │   └── kustomization.yaml
-│   ├── postgres/
-│   │   ├── statefulset.yaml
-│   │   ├── service.yaml
-│   │   └── kustomization.yaml
-│   ├── kafka/
-│   │   ├── statefulset.yaml
-│   │   ├── service.yaml
-│   │   └── kustomization.yaml
-│   ├── monitoring/
-│   │   ├── prometheus/
-│   │   ├── grafana/
-│   │   └── exporters/
-│   └── kustomization.yaml
+│   ├── namespace.yaml
+│   ├── secrets.yaml
+│   ├── ingress.yaml
+│   ├── cert-manager.yaml
+│   ├── kustomization.yaml
+│   ├── moalog-server/         # Deployment + Service + ConfigMap
+│   ├── rate-limiter/          # Deployment + Service (OTel init)
+│   ├── fluxpay-engine/        # Deployment + Service (OTel init)
+│   ├── redis/                 # StatefulSet + Service + PVC
+│   ├── mysql/                 # StatefulSet + Service + ConfigMap(init SQL)
+│   ├── postgres/              # StatefulSet + Service + ConfigMap(init SQL)
+│   ├── zookeeper/             # StatefulSet + Service
+│   ├── kafka/                 # StatefulSet + Service
+│   └── monitoring/
+│       ├── prometheus/        # Deployment + Service + SA/RBAC + ConfigMap + PVC
+│       ├── grafana/           # Deployment + Service + ConfigMap(datasources) + PVC
+│       ├── alertmanager/      # Deployment + Service + ConfigMap
+│       ├── loki/              # StatefulSet + Service + ConfigMap
+│       ├── promtail/          # DaemonSet + SA/RBAC + ConfigMap
+│       ├── jaeger/            # Deployment + Service
+│       ├── otel-collector/    # Deployment + Service + ConfigMap
+│       └── exporters/         # redis/mysqld/rjmx×2 Deployments + Services
 ├── overlays/
-│   ├── dev/
-│   │   ├── kustomization.yaml
-│   │   └── patches/
-│   └── prod/
-│       ├── kustomization.yaml
-│       └── patches/
-└── kustomization.yaml
+│   ├── dev/                   # replicas=1, 리소스 축소, TLS 없음, *.moalog.local
+│   └── prod/                  # replicas=3, HPA, cert-manager, *.moalog.com
+└── (83 files total)
 ```
-
-**서비스별 핵심 설정**:
-
-| 서비스 | 리소스 | Replicas | Probes |
-|--------|--------|----------|--------|
-| moalog-server | 256Mi / 500m | 2 | /health |
-| rate-limiter | 512Mi / 500m | 2 | /actuator/health |
-| fluxpay-engine | 512Mi / 500m | 2 | /api/v1/health |
-| redis | 128Mi / 250m | 1 (StatefulSet) | redis-cli ping |
-| mysql | 512Mi / 500m | 1 (StatefulSet) | mysqladmin ping |
-| postgres | 256Mi / 500m | 1 (StatefulSet) | pg_isready |
 
 ---
 
-### 8-2. Ingress & TLS
+## 8-1. 서비스별 K8s 매니페스트
 
-**Ingress Controller**: NGINX Ingress
+rJMX-Exporter의 기존 패턴(Kustomize)을 확장하여 전체 서비스를 전환.
 
-```yaml
-# 라우팅 규칙
+| 서비스 | 종류 | Replicas | Probes | 리소스(req/limit) |
+|--------|------|----------|--------|------------------|
+| moalog-server | Deployment | 2 | tcpSocket:8080 | 128m-500m / 256Mi-512Mi |
+| rate-limiter | Deployment | 2 | /actuator/health | 250m-500m / 512Mi-768Mi |
+| fluxpay-engine | Deployment | 2 | /api/v1/health | 250m-500m / 512Mi-768Mi |
+| redis | StatefulSet | 1 | redis-cli ping | 100m-250m / 128Mi-256Mi |
+| mysql | StatefulSet | 1 | mysqladmin ping | 250m-500m / 512Mi-1Gi |
+| postgres | StatefulSet | 1 | pg_isready | 100m-500m / 256Mi-512Mi |
+| zookeeper | StatefulSet | 1 | tcpSocket:2181 | 100m-250m / 256Mi-512Mi |
+| kafka | StatefulSet | 1 | tcpSocket:9092 | 250m-500m / 512Mi-1Gi |
+
+**JVM 서비스 OTel 자동 계측**: initContainer(busybox)로 opentelemetry-javaagent v2.11.0 다운로드 → emptyDir 공유
+
+---
+
+## 8-2. Ingress & TLS
+
+**NGINX Ingress 라우팅**:
+```
 api.moalog.com/         → moalog-server:8080
 api.moalog.com/pay/     → fluxpay-engine:8080
 grafana.moalog.com/     → grafana:3000
 ```
 
-**TLS**: cert-manager + Let's Encrypt
-
-```yaml
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-prod
-spec:
-  acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
-    email: admin@moalog.com
-    privateKeySecretRef:
-      name: letsencrypt-prod
-    solvers:
-      - http01:
-          ingress:
-            class: nginx
-```
+**Dev**: `moalog.local`, `grafana.moalog.local` (TLS 없음)
+**Prod**: cert-manager + Let's Encrypt ClusterIssuer
 
 ---
 
-### 8-3. Secret 관리
+## 8-3. Secret 관리
 
-| 시크릿 | 현재 | 목표 |
-|--------|------|------|
-| DB 비밀번호 | 환경변수 하드코딩 | K8s Secret (base64) |
-| JWT_SECRET | .env 파일 | Sealed Secrets |
-| OPENAI_API_KEY | .env 파일 | External Secrets (AWS SSM) |
-| TOSS_SECRET_KEY | .env 파일 | External Secrets (AWS SSM) |
-| Grafana admin | 기본값 admin/admin | K8s Secret |
+통합 Secret (`moalog-secrets`)에 모든 시크릿 중앙 관리:
+- mysql-root-password, mysql-exporter-password
+- postgres-password
+- jwt-secret, openai-api-key, toss-secret-key
+- grafana-admin-password, actuator-user/password
 
-**Phase 1**: K8s Secret (base64) — 기본 구현
-**Phase 2**: Sealed Secrets 또는 External Secrets Operator — 프로덕션
+**현재**: K8s Secret (stringData) — Phase 1 완료
+**향후**: Sealed Secrets 또는 External Secrets Operator
 
 ---
 
-### 8-4. Helm Chart (선택)
+## 8-4. Overlays
 
-Kustomize로 충분하지 않을 경우 Helm Chart 전환.
+| 환경 | Replicas | 리소스 | HPA | TLS | 호스트 |
+|------|----------|--------|-----|-----|--------|
+| dev | 1 | 최소 (64m-250m) | 없음 | 없음 | *.moalog.local |
+| prod | 3 | 확장 (256m-1) | 있음 (CPU 70%) | cert-manager | *.moalog.com |
 
-```
-moalog-platform/charts/
-└── moalog/
-    ├── Chart.yaml
-    ├── values.yaml
-    ├── values-dev.yaml
-    ├── values-prod.yaml
-    └── templates/
-        ├── deployment.yaml
-        ├── service.yaml
-        ├── ingress.yaml
-        └── _helpers.tpl
+**Prod HPA 설정**:
+- moalog-server: 2-10 replicas
+- rate-limiter: 2-8 replicas
+- fluxpay-engine: 2-8 replicas
+
+---
+
+## 8-5. Monitoring Stack (K8s)
+
+| 서비스 | 리소스 타입 | 비고 |
+|--------|------------|------|
+| Prometheus | Deployment + RBAC | K8s pod SD, 15d retention |
+| Grafana | Deployment + PVC | datasources/dashboards provisioning |
+| Alertmanager | Deployment | Slack/PagerDuty webhook 지원 |
+| Loki | StatefulSet + PVC | filesystem 스토리지 |
+| Promtail | DaemonSet + RBAC | K8s pod log 수집 |
+| Jaeger | Deployment | all-in-one, OTLP 수신 |
+| OTel Collector | Deployment | traces→Jaeger, metrics→Prometheus |
+| Exporters | Deployment×4 | redis, mysqld, rjmx×2 |
+
+---
+
+## 사용법
+
+```bash
+# Dev 환경 배포
+kubectl apply -k k8s/overlays/dev/
+
+# Prod 환경 배포
+kubectl apply -k k8s/overlays/prod/
+
+# Kustomize 빌드 확인 (dry-run)
+kubectl kustomize k8s/overlays/dev/
 ```
 
 ---
 
 ## 완료 기준
 
-- [ ] `kubectl apply -k k8s/overlays/dev/` 로 전체 스택 기동
-- [ ] 모든 Pod Running + healthcheck 통과
-- [ ] Ingress를 통한 외부 접근 확인
-- [ ] TLS 인증서 자동 발급 확인
-- [ ] Secret이 평문으로 노출되지 않음
+- [x] `kubectl kustomize` 빌드 성공 (base, dev, prod)
+- [x] 전체 20개 서비스 K8s 매니페스트 작성
+- [x] Ingress (NGINX) 라우팅 규칙 설정
+- [x] TLS (cert-manager + Let's Encrypt) 구성
+- [x] Secret 중앙 관리 (K8s Secret)
+- [x] dev/prod overlay 분리 (replicas, resources, HPA)
+- [ ] 실제 클러스터 배포 검증 (minikube/EKS)

@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+commonLabels:
+  environment: dev
+
+patchesStrategicMerge:
+  - patches/reduce-replicas.yaml
+  - patches/reduce-replicas-rate-limiter.yaml
+  - patches/reduce-replicas-fluxpay.yaml
+  - patches/dev-resources.yaml
+  - patches/dev-resources-rate-limiter.yaml
+  - patches/dev-resources-fluxpay.yaml
+  - patches/dev-ingress.yaml

@@ -1,0 +1,125 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: moalog
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    rule_files:
+      - /etc/prometheus/alert-rules.yml
+
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: ["alertmanager:9093"]
+
+    scrape_configs:
+      - job_name: "moalog-server"
+        metrics_path: /metrics
+        static_configs:
+          - targets: ["moalog-server:8080"]
+
+      - job_name: "rate-limiter"
+        metrics_path: /actuator/prometheus
+        static_configs:
+          - targets: ["rate-limiter:8080"]
+
+      - job_name: "fluxpay-engine"
+        metrics_path: /actuator/prometheus
+        static_configs:
+          - targets: ["fluxpay-engine:8080"]
+
+      - job_name: "redis-exporter"
+        static_configs:
+          - targets: ["redis-exporter:9121"]
+
+      - job_name: "mysqld-exporter"
+        static_configs:
+          - targets: ["mysqld-exporter:9104"]
+
+      - job_name: "rjmx-rate-limiter"
+        static_configs:
+          - targets: ["rjmx-exporter-rate-limiter:9090"]
+
+      - job_name: "rjmx-fluxpay"
+        static_configs:
+          - targets: ["rjmx-exporter-fluxpay:9090"]
+
+      - job_name: "otel-collector"
+        static_configs:
+          - targets: ["otel-collector:8889"]
+
+      - job_name: "kubernetes-pods"
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: ["moalog"]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+
+  alert-rules.yml: |
+    groups:
+      - name: moalog-alerts
+        rules:
+          - alert: ServiceDown
+            expr: up == 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "{{ $labels.job }} is down"
+
+          - alert: HighLatency
+            expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, job)) > 1
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High p95 latency on {{ $labels.job }}"
+
+          - alert: HighErrorRate
+            expr: sum(rate(http_requests_total{status=~"5.."}[5m])) by (job) / sum(rate(http_requests_total[5m])) by (job) > 0.05
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Error rate > 5% on {{ $labels.job }}"
+
+          - alert: JVMHeapHigh
+            expr: jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"} > 0.85
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "JVM heap usage > 85% on {{ $labels.instance }}"
+
+          - alert: RedisHighMemory
+            expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.8
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Redis memory usage > 80%"
+
+          - alert: MySQLSlowQueries
+            expr: rate(mysql_global_status_slow_queries[5m]) > 0.1
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "MySQL slow queries detected"

@@ -1,0 +1,46 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: moalog-ingress
+  namespace: moalog
+  labels:
+    app.kubernetes.io/part-of: moalog-platform
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - api.moalog.com
+        - grafana.moalog.com
+      secretName: moalog-tls
+  rules:
+    - host: api.moalog.com
+      http:
+        paths:
+          - path: /pay
+            pathType: Prefix
+            backend:
+              service:
+                name: fluxpay-engine
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: moalog-server
+                port:
+                  number: 8080
+    - host: grafana.moalog.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 3000
