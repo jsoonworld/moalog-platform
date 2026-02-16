@@ -1,0 +1,310 @@
+# Moalog Platform — Integration CI
+name: Integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  REDIS_PORT: 6379
+  MYSQL_PORT: 3306
+  SERVER_PORT: 8080
+  RATE_LIMITER_PORT: 8082
+  FLUXPAY_PORT: 8081
+  FLUXPAY_POSTGRES_PORT: 5432
+  PROMETHEUS_PORT: 9090
+  GRAFANA_PORT: 3000
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Job 1: Validate configs
+  # ──────────────────────────────────────────────
+  validate:
+    name: Validate Configs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Validate docker-compose syntax
+        run: docker compose -f moalog-server/docker-compose.yaml config --quiet
+
+      - name: Verify .env.example exists
+        run: |
+          if [ ! -f .env.example ]; then
+            echo "::error::.env.example not found"
+            exit 1
+          fi
+          echo ".env.example found"
+
+      - name: Validate Prometheus config
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/moalog-server/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
+            prom/prometheus:v2.48.0 \
+            promtool check config /etc/prometheus/prometheus.yml
+
+      - name: Check Makefile exists
+        run: |
+          if [ ! -f Makefile ]; then
+            echo "::error::Makefile not found"
+            exit 1
+          fi
+          echo "Makefile found"
+
+  # ──────────────────────────────────────────────
+  # Job 2: Smoke test (full stack)
+  # ──────────────────────────────────────────────
+  smoke-test:
+    name: Smoke Test
+    runs-on: ubuntu-latest
+    needs: validate
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Start full stack
+        working-directory: moalog-server
+        run: docker compose up -d --build
+        env:
+          REDIS_PORT: ${{ env.REDIS_PORT }}
+          MYSQL_PORT: ${{ env.MYSQL_PORT }}
+          SERVER_PORT: ${{ env.SERVER_PORT }}
+          RATE_LIMITER_PORT: ${{ env.RATE_LIMITER_PORT }}
+          FLUXPAY_PORT: ${{ env.FLUXPAY_PORT }}
+          FLUXPAY_POSTGRES_PORT: ${{ env.FLUXPAY_POSTGRES_PORT }}
+          PROMETHEUS_PORT: ${{ env.PROMETHEUS_PORT }}
+          GRAFANA_PORT: ${{ env.GRAFANA_PORT }}
+
+      - name: Wait for services to be healthy
+        run: |
+          echo "Waiting for services to be healthy..."
+          TIMEOUT=300
+          ELAPSED=0
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            HEALTHY=$(docker ps --filter "health=healthy" --format "{{.Names}}" | wc -l | tr -d ' ')
+            TOTAL=$(docker ps --format "{{.Names}}" | wc -l | tr -d ' ')
+            echo "  [$ELAPSED s] Healthy: $HEALTHY / $TOTAL"
+
+            # moalog-server, rate-limiter, fluxpay-engine, redis, mysql, postgres = 6 healthchecked services
+            if [ "$HEALTHY" -ge 6 ]; then
+              echo "All core services healthy!"
+              break
+            fi
+
+            sleep 10
+            ELAPSED=$((ELAPSED + 10))
+          done
+
+          if [ $ELAPSED -ge $TIMEOUT ]; then
+            echo "::error::Timed out waiting for services"
+            docker ps -a
+            docker compose -f moalog-server/docker-compose.yaml logs --tail=50
+            exit 1
+          fi
+
+      - name: Verify API health endpoints
+        run: |
+          set -e
+          echo "=== Checking moalog-server ==="
+          curl -sf http://localhost:${SERVER_PORT}/health
+
+          echo ""
+          echo "=== Checking rate-limiter ==="
+          curl -sf http://localhost:${RATE_LIMITER_PORT}/actuator/health
+
+          echo ""
+          echo "=== Checking fluxpay-engine ==="
+          curl -sf http://localhost:${FLUXPAY_PORT}/api/v1/health
+
+          echo ""
+          echo "=== Checking Prometheus ==="
+          curl -sf http://localhost:${PROMETHEUS_PORT}/-/healthy
+
+          echo ""
+          echo "=== Checking Grafana ==="
+          curl -sf http://localhost:${GRAFANA_PORT}/api/health
+
+          echo ""
+          echo "All health checks passed!"
+
+      - name: Verify Prometheus targets
+        run: |
+          echo "=== Prometheus Targets ==="
+          TARGETS=$(curl -sf http://localhost:${PROMETHEUS_PORT}/api/v1/targets | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          active = data['data']['activeTargets']
+          up = sum(1 for t in active if t['health'] == 'up')
+          total = len(active)
+          print(f'{up}/{total} targets UP')
+          for t in active:
+              print(f\"  {t['labels'].get('job','?'):30s} {t['health']}\")
+          if up < total:
+              sys.exit(1)
+          ")
+          echo "$TARGETS"
+
+      - name: Collect docker ps output
+        if: always()
+        run: docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+      - name: Stop stack
+        if: always()
+        working-directory: moalog-server
+        run: docker compose down -v
+
+  # ──────────────────────────────────────────────
+  # Job 3: Load test (baseline only, on push to main)
+  # ──────────────────────────────────────────────
+  load-test:
+    name: Load Test (Baseline)
+    runs-on: ubuntu-latest
+    needs: smoke-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D68
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | \
+            sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6
+
+      - name: Start full stack
+        working-directory: moalog-server
+        run: docker compose up -d --build
+        env:
+          REDIS_PORT: ${{ env.REDIS_PORT }}
+          MYSQL_PORT: ${{ env.MYSQL_PORT }}
+          SERVER_PORT: ${{ env.SERVER_PORT }}
+
+      - name: Wait for services
+        run: |
+          TIMEOUT=300
+          ELAPSED=0
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            HEALTHY=$(docker ps --filter "health=healthy" --format "{{.Names}}" | wc -l | tr -d ' ')
+            if [ "$HEALTHY" -ge 6 ]; then break; fi
+            sleep 10
+            ELAPSED=$((ELAPSED + 10))
+          done
+
+      - name: Setup test data
+        run: |
+          if [ -f load-tests/setup-test-data.sh ]; then
+            chmod +x load-tests/setup-test-data.sh
+            ./load-tests/setup-test-data.sh || true
+          fi
+
+      - name: Run baseline load test
+        run: |
+          k6 run load-tests/scenarios/baseline.js \
+            --out json=load-tests/results/baseline-ci.json \
+            --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
+            2>&1 | tee load-test-output.txt
+        env:
+          BASE_URL: http://localhost:${{ env.SERVER_PORT }}
+
+      - name: Check p95 threshold
+        run: |
+          P95=$(grep -oP 'p\(95\)=\K[0-9.]+' load-test-output.txt | head -1 || echo "0")
+          echo "p95 latency: ${P95}ms"
+          if [ "$(echo "$P95 > 1000" | bc -l 2>/dev/null || echo 0)" = "1" ]; then
+            echo "::warning::p95 latency ${P95}ms exceeds 1000ms threshold"
+          fi
+
+      - name: Upload load test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: load-test-results
+          path: |
+            load-tests/results/baseline-ci.json
+            load-test-output.txt
+          retention-days: 14
+
+      - name: Stop stack
+        if: always()
+        working-directory: moalog-server
+        run: docker compose down -v
+
+  # ──────────────────────────────────────────────
+  # Job 4: Docker image security scan (Trivy)
+  # ──────────────────────────────────────────────
+  security-scan:
+    name: "Trivy Scan: ${{ matrix.service }}"
+    runs-on: ubuntu-latest
+    needs: validate
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: moalog-server
+            context: moalog-server/codes/server
+            dockerfile: moalog-server/codes/server/Dockerfile
+          - service: rate-limiter
+            context: distributed-rate-limiter
+            dockerfile: distributed-rate-limiter/Dockerfile
+          - service: fluxpay-engine
+            context: fluxpay-engine
+            dockerfile: fluxpay-engine/Dockerfile
+          - service: rjmx-exporter
+            context: rJMX-Exporter
+            dockerfile: rJMX-Exporter/Dockerfile
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build ${{ matrix.service }} image
+        run: docker build -t ${{ matrix.service }}:scan -f ${{ matrix.dockerfile }} ${{ matrix.context }}
+
+      - name: Run Trivy scanner on ${{ matrix.service }}
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ matrix.service }}:scan'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+        continue-on-error: true
+
+      - name: Trivy SARIF output
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ matrix.service }}:scan'
+          format: 'sarif'
+          output: 'trivy-${{ matrix.service }}.sarif'
+          severity: 'CRITICAL,HIGH'
+        continue-on-error: true
+
+      - name: Upload Trivy results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-${{ matrix.service }}
+          path: trivy-${{ matrix.service }}.sarif
+          retention-days: 14
