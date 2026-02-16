@@ -11,6 +11,8 @@
 #   make health    — Check health of every service
 #   make clean     — Stop + remove volumes (full reset)
 #   make test-load — Run k6 load tests
+#   make test-chaos — Run chaos/failure tests
+#   make test-circuit-breaker — Run circuit breaker verification
 # ============================================================
 
 # --- Port defaults (avoid host conflicts) ---
@@ -31,7 +33,7 @@ export JAEGER_UI_PORT   ?= 16686
 COMPOSE_FILE := moalog-server/docker-compose.yaml
 COMPOSE      := docker compose -f $(COMPOSE_FILE)
 
-.PHONY: up down restart ps logs build health clean test-load
+.PHONY: up down restart ps logs build health clean test-load test-chaos test-circuit-breaker
 
 # --- Core commands ---
 
@@ -80,7 +82,7 @@ health:
 	  curl -sf http://localhost:$(FLUXPAY_PORT)/api/v1/health > /dev/null 2>&1 \
 	  && echo "✅ healthy" || echo "❌ down"
 	@printf "%-22s" "redis:" ; \
-	  docker exec moalog-redis redis-cli ping 2>/dev/null | grep -q PONG \
+	  docker exec moalog-redis redis-cli --no-auth-warning -a $${REDIS_PASSWORD:-moalog_redis_local} ping 2>/dev/null | grep -q PONG \
 	  && echo "✅ healthy" || echo "❌ down"
 	@printf "%-22s" "mysql:" ; \
 	  docker exec moalog-mysql mysqladmin ping -h localhost -u root -pmoalog_local 2>/dev/null | grep -q alive \
@@ -122,3 +124,13 @@ test-load:
 	k6 run load-tests/scenarios/baseline.js \
 	  --out json=load-tests/results/baseline.json \
 	  --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)"
+
+test-chaos:
+	@echo "=== Running chaos tests ==="
+	@command -v k6 > /dev/null 2>&1 || { echo "❌ k6 not installed. brew install k6"; exit 1; }
+	bash load-tests/scenarios/chaos/run-all.sh
+
+test-circuit-breaker:
+	@echo "=== Running circuit breaker verification ==="
+	@command -v k6 > /dev/null 2>&1 || { echo "❌ k6 not installed. brew install k6"; exit 1; }
+	bash load-tests/scenarios/chaos/circuit-breaker-test.sh
