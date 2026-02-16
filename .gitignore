@@ -5,6 +5,9 @@ moalog-server/
 distributed-rate-limiter/
 fluxpay-engine/
 rJMX-Exporter/
+realtime-notification-hub/
+event-notification-platform/
+retro-rag-assistant/
 
 # ======================
 # OS / Editor
